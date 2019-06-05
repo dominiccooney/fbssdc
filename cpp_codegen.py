@@ -8,11 +8,13 @@
 # Generates helpers from the ES6 IDL aimed to support a C++ decoder
 # implementation.
 
+import re
+
 import encode
 import model
 import idl
 
-class TypeVisitor:
+class TypeVisitor(object):
   """Traverses a type hierarchy from a given root."""
   def __init__(self, resolver):
     self.resolver = resolver
@@ -53,6 +55,7 @@ class TypeVisitor:
 
   def visit_frozen_array_type(self, ty):
     raise NotImplementedError()
+
 
 class CppTypeMacroGenerator(TypeVisitor):
   def generate(self):
@@ -119,7 +122,7 @@ class CppTypeMacroGenerator(TypeVisitor):
     def gen_fields(fields):
       return ', '.join([ f'T({name}, {ty_name}, {lazy}, {model_id})' for name, ty_name, lazy, model_id in fields ])
 
-    interfaces = ' \\\n'.join([ f'  V({name}, {gen_fields(fields)}' for name, fields in self.interfaces ])
+    interfaces = ' \\\n'.join([ f'  V({name}, {gen_fields(fields)})' for name, fields in self.interfaces ])
 
     return f'#define BINAST_INTERFACES(V,T) \\\n{interfaces}'
 
@@ -143,7 +146,62 @@ class CppTypeMacroGenerator(TypeVisitor):
     frozen_arrays = ' \\\n'.join([ f'  V({name}, {elem_name}, {model_id})' for name, elem_name, model_id in self.frozen_arrays ])
     return f'#define BINAST_FROZEN_ARRAYS(V) \\\n{frozen_arrays}\n'
 
-resolver = idl.parse_es6_idl()
-generator = CppTypeMacroGenerator(resolver)
-generator.generate()
-print(generator.gen_all())
+
+SYMBOL_NAMES = {
+  '+': 'PLUS',
+  '-': 'MINUS',
+  '=': 'EQUAL',
+  '/': 'SLASH',
+  '*': 'STAR',
+  '<': 'LESS',
+  '>': 'GREATER',
+  '|': 'PIPE',
+  '^': 'HAT',
+  '&': 'AND',
+  ',': 'COMMA',
+  '!': 'BANG',
+  '%': 'PCT',
+  '~': 'TILDE',
+}
+
+
+class CppEnumTranslator(object):
+  '''Given a Web IDL enum, generates a C++ enum with the same symbols.
+
+  When serializing models, enumerations are partly ordered by the
+  string values of the Web IDL enum members. C++ has no use for the
+  string values, but does need the order, so the generated enum values
+  are in this order.
+  '''
+  def __init__(self, types):
+    self.types = types
+
+  def gen(self):
+    return '\n\n'.join(map(self.gen_enum, self.types.enums.values()))
+
+  def gen_enum(self, ty):
+    specials = frozenset(SYMBOL_NAMES.keys())
+    def make_name(v: str):
+      chs = frozenset(v)
+      if chs - specials:
+        name = re.sub('[- ]', '_', v).upper()
+      else:
+        name = '_'.join([SYMBOL_NAMES[ch] for ch in v])
+      return name
+    values = sorted(ty.values)
+    members = ',\n  '.join(map(make_name, values))
+    return f'enum class {ty.name} {{\n  {members}\n}};'
+
+
+def main():
+  resolver = idl.parse_es6_idl()
+  generator = CppTypeMacroGenerator(resolver)
+  generator.generate()
+  print(generator.gen_all())
+
+  enums = CppEnumTranslator(resolver)
+  print(enums.gen())
+
+
+if __name__ == '__main__':
+  main()
